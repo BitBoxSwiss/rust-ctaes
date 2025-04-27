@@ -11,10 +11,7 @@ keywords = [
     "aes",
     "crypto",
     "encryption",
-    "symmetric",
-    "ctaes",
     "ffi",
-    "embedded",
     "no_std"
 ]
 categories = ["cryptography", "external-ffi-bindings", "embedded", "no-std"]
