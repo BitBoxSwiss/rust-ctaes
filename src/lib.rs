@@ -1,5 +1,10 @@
 #![no_std]
 
+#[macro_use]
+extern crate alloc;
+
+use alloc::vec::Vec;
+
 use core::mem::MaybeUninit;
 
 // FFI view of the C structs.
@@ -95,14 +100,64 @@ macro_rules! impl_aes {
                 }
             }
 
-            /// Encrypt one 16-byte block in-place.
-            pub fn encrypt(&self, inout: &mut [u8; 16]) {
-                unsafe { $enc(&self.inner, 1, inout.as_mut_ptr(), inout.as_ptr()) }
+            /// Encrypts the input. The input must not be empty and its size must be a multiple of
+            /// 16.  The output size must be the same as the input size.
+            pub fn encrypt_to_slice(&self, plain: &[u8], cipher: &mut [u8]) {
+                assert!(!plain.is_empty());
+                assert_eq!(plain.len() % 16, 0, "input is not block-aligned");
+                assert_eq!(
+                    plain.len(),
+                    cipher.len(),
+                    "output must have the same size as the input"
+                );
+                unsafe {
+                    $enc(
+                        &self.inner,
+                        plain.len() / 16,
+                        cipher.as_mut_ptr(),
+                        plain.as_ptr(),
+                    )
+                }
             }
 
-            /// Decrypt one 16-byte block in-place.
-            pub fn decrypt(&self, inout: &mut [u8; 16]) {
-                unsafe { $dec(&self.inner, 1, inout.as_mut_ptr(), inout.as_ptr()) }
+            /// Encrypts the input. The input must not be empty and its size must be a multiple of
+            /// 16.
+            pub fn encrypt(&self, plain: &[u8]) -> Vec<u8> {
+                assert!(!plain.is_empty());
+                assert_eq!(plain.len() % 16, 0, "input is not block-aligned");
+                let mut out = vec![0u8; plain.len()];
+                self.encrypt_to_slice(plain, out.as_mut_slice());
+                out
+            }
+
+            /// Decrypts the input. The input must not be empty and its size must be a multiple of
+            /// 16.  The output size must be the same as the input size.
+            pub fn decrypt_to_slice(&self, cipher: &[u8], plain: &mut [u8]) {
+                assert!(!cipher.is_empty());
+                assert_eq!(cipher.len() % 16, 0, "input is not block-aligned");
+                assert_eq!(
+                    plain.len(),
+                    cipher.len(),
+                    "output must have the same size as the input"
+                );
+                unsafe {
+                    $dec(
+                        &self.inner,
+                        cipher.len() / 16,
+                        plain.as_mut_ptr(),
+                        cipher.as_ptr(),
+                    )
+                }
+            }
+
+            /// Decrypts the input. The input must not be empty and its size must be a multiple of
+            /// 16.
+            pub fn decrypt(&self, cipher: &[u8]) -> Vec<u8> {
+                assert!(!cipher.is_empty());
+                assert_eq!(cipher.len() % 16, 0, "input is not block-aligned");
+                let mut out = vec![0u8; cipher.len()];
+                self.decrypt_to_slice(cipher, out.as_mut_slice());
+                out
             }
         }
     };
@@ -127,36 +182,60 @@ macro_rules! impl_aes_cbc {
                 }
             }
 
-            /// Encrypts `inout` (multiple of 16 bytes) in-place.
-            pub fn encrypt(&mut self, inout: &mut [u8]) -> Result<(), Error> {
-                if inout.len() % 16 != 0 {
-                    return Err(Error::NotBlockAligned);
-                }
+            /// Encrypts the input. The input must not be empty and its size must be a multiple of
+            /// 16.  The output size must be the same as the input size.
+            pub fn encrypt_to_slice(&mut self, plain: &[u8], cipher: &mut [u8]) {
+                assert_eq!(plain.len() % 16, 0, "input is not block-aligned");
+                assert_eq!(
+                    plain.len(),
+                    cipher.len(),
+                    "output must have the same size as the input"
+                );
                 unsafe {
                     $enc(
                         &mut self.inner,
-                        inout.len() / 16,
-                        inout.as_mut_ptr(),
-                        inout.as_ptr(),
-                    );
+                        plain.len() / 16,
+                        cipher.as_mut_ptr(),
+                        plain.as_ptr(),
+                    )
                 }
-                Ok(())
             }
 
-            /// Decrypts `inout` (multiple of 16 bytes) in-place.
-            pub fn decrypt(&mut self, inout: &mut [u8]) -> Result<(), Error> {
-                if inout.len() % 16 != 0 {
-                    return Err(Error::NotBlockAligned);
-                }
+            /// Encrypts the input. The input must not be empty and its size must be a multiple of
+            /// 16.
+            pub fn encrypt(&mut self, plain: &[u8]) -> Vec<u8> {
+                assert_eq!(plain.len() % 16, 0, "input is not block-aligned");
+                let mut out = vec![0u8; plain.len()];
+                self.encrypt_to_slice(plain, out.as_mut_slice());
+                out
+            }
+
+            /// Decrypts the input. The input must not be empty and its size must be a multiple of
+            /// 16.  The output size must be the same as the input size.
+            pub fn decrypt_to_slice(&mut self, cipher: &[u8], plain: &mut [u8]) {
+                assert_eq!(cipher.len() % 16, 0, "input is not block-aligned");
+                assert_eq!(
+                    plain.len(),
+                    cipher.len(),
+                    "output must have the same size as the input"
+                );
                 unsafe {
                     $dec(
                         &mut self.inner,
-                        inout.len() / 16,
-                        inout.as_mut_ptr(),
-                        inout.as_ptr(),
-                    );
+                        cipher.len() / 16,
+                        plain.as_mut_ptr(),
+                        cipher.as_ptr(),
+                    )
                 }
-                Ok(())
+            }
+
+            /// Decrypts the input. The input must not be empty and its size must be a multiple of
+            /// 16.
+            pub fn decrypt(&mut self, cipher: &[u8]) -> Vec<u8> {
+                assert_eq!(cipher.len() % 16, 0, "input is not block-aligned");
+                let mut out = vec![0u8; cipher.len()];
+                self.decrypt_to_slice(cipher, out.as_mut_slice());
+                out
             }
         }
     };
@@ -217,10 +296,6 @@ mod tests {
     use super::*;
     use hex::decode;
 
-    extern crate alloc;
-
-    use alloc::vec::Vec;
-
     fn unhex(s: &str) -> Vec<u8> {
         decode(s).unwrap()
     }
@@ -228,12 +303,12 @@ mod tests {
     #[test]
     fn test_roundtrip() {
         let key = [0u8; 32];
-        let mut blk = [0u8; 16];
+        let plain = [0u8; 16];
         let aes = Aes256::new(&key);
-        aes.encrypt(&mut blk);
-        assert_eq!(hex::encode(blk), "dc95c078a2408989ad48a21492842087");
-        aes.decrypt(&mut blk);
-        assert_eq!(blk, [0; 16]);
+        let cipher = aes.encrypt(&plain);
+        assert_eq!(hex::encode(&cipher), "dc95c078a2408989ad48a21492842087");
+        let dec = aes.decrypt(&cipher);
+        assert_eq!(plain, dec.as_slice());
     }
 
     /* ---------- ECB vectors, taken from ctaes/test.c ---------- */
@@ -396,43 +471,43 @@ mod tests {
     fn test_ecb() {
         for v in ECB {
             let key = unhex(v.key);
-            let mut blk: [u8; 16] = unhex(v.plain).as_slice().try_into().unwrap();
+            let plain = unhex(v.plain);
 
             /* encrypt */
-            match v.ks {
+            let cipher = match v.ks {
                 128 => {
                     let aes = Aes128::new(key.as_slice().try_into().unwrap());
-                    aes.encrypt(&mut blk)
+                    aes.encrypt(&plain)
                 }
                 192 => {
                     let aes = Aes192::new(key.as_slice().try_into().unwrap());
-                    aes.encrypt(&mut blk)
+                    aes.encrypt(&plain)
                 }
                 256 => {
                     let aes = Aes256::new(key.as_slice().try_into().unwrap());
-                    aes.encrypt(&mut blk)
+                    aes.encrypt(&plain)
                 }
                 _ => unreachable!(),
             };
-            assert_eq!(unhex(v.cipher), blk);
+            assert_eq!(unhex(v.cipher), cipher);
 
             /* decrypt */
-            match v.ks {
+            let dec = match v.ks {
                 128 => {
                     let aes = Aes128::new(key.as_slice().try_into().unwrap());
-                    aes.decrypt(&mut blk)
+                    aes.decrypt(&cipher)
                 }
                 192 => {
                     let aes = Aes192::new(key.as_slice().try_into().unwrap());
-                    aes.decrypt(&mut blk)
+                    aes.decrypt(&cipher)
                 }
                 256 => {
                     let aes = Aes256::new(key.as_slice().try_into().unwrap());
-                    aes.decrypt(&mut blk)
+                    aes.decrypt(&cipher)
                 }
                 _ => unreachable!(),
             };
-            assert_eq!(unhex(v.plain), blk);
+            assert_eq!(plain, dec);
         }
     }
 
@@ -441,43 +516,43 @@ mod tests {
         for v in CBC {
             let key = unhex(v.key);
             let iv: [u8; 16] = unhex(v.iv).as_slice().try_into().unwrap();
-            let mut buffer = unhex(v.plain);
+            let plain = unhex(v.plain);
 
             /* encrypt */
-            match v.ks {
+            let cipher = match v.ks {
                 128 => {
                     let mut cbc = Aes128Cbc::new(key.as_slice().try_into().unwrap(), &iv);
-                    cbc.encrypt(&mut buffer).unwrap()
+                    cbc.encrypt(&plain)
                 }
                 192 => {
                     let mut cbc = Aes192Cbc::new(key.as_slice().try_into().unwrap(), &iv);
-                    cbc.encrypt(&mut buffer).unwrap()
+                    cbc.encrypt(&plain)
                 }
                 256 => {
                     let mut cbc = Aes256Cbc::new(key.as_slice().try_into().unwrap(), &iv);
-                    cbc.encrypt(&mut buffer).unwrap()
+                    cbc.encrypt(&plain)
                 }
                 _ => unreachable!(),
             };
-            assert_eq!(unhex(v.cipher), buffer);
+            assert_eq!(unhex(v.cipher), cipher);
 
             /* decrypt */
-            match v.ks {
+            let dec = match v.ks {
                 128 => {
                     let mut cbc = Aes128Cbc::new(key.as_slice().try_into().unwrap(), &iv);
-                    cbc.decrypt(&mut buffer).unwrap()
+                    cbc.decrypt(&cipher)
                 }
                 192 => {
                     let mut cbc = Aes192Cbc::new(key.as_slice().try_into().unwrap(), &iv);
-                    cbc.decrypt(&mut buffer).unwrap()
+                    cbc.decrypt(&cipher)
                 }
                 256 => {
                     let mut cbc = Aes256Cbc::new(key.as_slice().try_into().unwrap(), &iv);
-                    cbc.decrypt(&mut buffer).unwrap()
+                    cbc.decrypt(&cipher)
                 }
                 _ => unreachable!(),
             };
-            assert_eq!(unhex(v.plain), buffer);
+            assert_eq!(plain, dec);
         }
     }
 }
